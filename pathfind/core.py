@@ -1,5 +1,6 @@
 """Grid pathfinding (A*) and field of view, standard library only."""
 
+import heapq
 import math
 
 SQRT2 = math.sqrt(2.0)
@@ -49,7 +50,8 @@ class Grid(object):
             raise ValueError(
                 "cells are not adjacent: %r -> %r" % (tuple(from_cell), tuple(to_cell))
             )
-        return self.terrain_cost(to_cell)
+        base = SQRT2 if dx == 1 and dy == 1 else 1.0
+        return base * self.terrain_cost(to_cell)
 
     def iter_neighbors(self, cell, diagonal=True):
         """Yield the walkable neighbours of a cell, orthogonal ones first."""
@@ -66,7 +68,7 @@ class Grid(object):
                 continue
             side_x = (x + dx, y)
             side_y = (x, y + dy)
-            if not (self.is_walkable(side_x) or self.is_walkable(side_y)):
+            if not (self.is_walkable(side_x) and self.is_walkable(side_y)):
                 continue
             yield neighbour
 
@@ -75,6 +77,8 @@ def heuristic(a, b, diagonal=True):
     """Estimated distance between two cells."""
     dx = abs(a[0] - b[0])
     dy = abs(a[1] - b[1])
+    if diagonal:
+        return float(max(dx, dy)) + (SQRT2 - 1.0) * min(dx, dy)
     return float(dx + dy)
 
 
@@ -85,11 +89,11 @@ def pop_best(open_list):
 
 def reconstruct_path(came_from, current):
     """Return the recorded chain of cells for current."""
-    path = []
+    path = [current]
     node = current
     while node in came_from:
-        path.append(came_from[node])
         node = came_from[node]
+        path.append(node)
     path.reverse()
     return path
 
@@ -105,25 +109,31 @@ def find_path(grid, start, goal, diagonal=True):
     if start == goal:
         return [start]
 
-    open_list = [(heuristic(start, goal, diagonal), start)]
+    open_heap = [(heuristic(start, goal, diagonal), 0.0, start)]
     came_from = {}
     g_score = {start: 0.0}
+    closed = set()
 
-    while open_list:
-        current = pop_best(open_list)
+    while open_heap:
+        _, current_g, current = heapq.heappop(open_heap)
         if current == goal:
             return reconstruct_path(came_from, current)
-        current_g = g_score[current]
+        if current in closed:
+            continue
+        closed.add(current)
         for neighbour in grid.iter_neighbors(current, diagonal):
-            if neighbour in g_score:
+            if neighbour in closed:
                 continue
             tentative_g = current_g + grid.move_cost(current, neighbour)
-            g_score[neighbour] = tentative_g
-            came_from[neighbour] = current
-            open_list.append(
-                (tentative_g + heuristic(neighbour, goal, diagonal), neighbour)
-            )
-    return []
+            if tentative_g < g_score.get(neighbour, float("inf")):
+                g_score[neighbour] = tentative_g
+                came_from[neighbour] = current
+                heapq.heappush(
+                    open_heap,
+                    (tentative_g + heuristic(neighbour, goal, diagonal),
+                     tentative_g, neighbour),
+                )
+    return None
 
 
 def path_cost(grid, path):
@@ -147,8 +157,10 @@ def line(start, end):
     err = dx - dy
     cells = []
     x, y = x0, y0
-    while (x, y) != (x1, y1):
+    while True:
         cells.append((x, y))
+        if (x, y) == (x1, y1):
+            break
         err2 = 2 * err
         if err2 > -dy:
             err -= dy
